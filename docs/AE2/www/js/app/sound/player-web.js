@@ -46,11 +46,20 @@
 			}
 
 			newAudio.addEventListener('canplay', function () {
+				var audio = this; // 'this' refers to newAudio
 				if ( win.APP.info.get('music') === 'off' ) {
 					return;
 				}
-				var audio = this;
-				audio.play();
+
+				// Attempt to play the audio. This returns a Promise.
+				var playPromise = audio.play();
+				if (playPromise !== undefined) {
+					playPromise.catch(function(error) {
+						// console.warn('WebPlayer: audio.play() was prevented for sound: ' + (audio.src || data.sound), error);
+						// This catch is important. It prevents an unhandled promise rejection
+						// from stopping other JavaScript, such as navigation.
+					});
+				}
 			});
 
 			player.roads[roadNumber].src = '';

@@ -68,7 +68,11 @@
 		},
 
 		skirmishSetupMap: function (jsMapKey) {
-			new APP.BB.SkirmishSetupMapView(jsMapKey);
+			try {
+				new APP.BB.SkirmishSetupMapView(jsMapKey);
+			} catch (error) {
+				console.error('[Router skirmishSetupMap] CRITICAL ERROR while creating SkirmishSetupMapView:', error);
+			}
 		},
 
 		userMapSetupMap: function (jsMapKey) {
@@ -96,7 +100,6 @@
 		},
 
 		mainBattleMenu: function () {
-
 		},
 
 		mapEditor: function () {
@@ -107,6 +110,7 @@
 
 			var router = this,
 				originalFunctions = {},
+				// proto = Backbone.Router.prototype; // This was incorrect for accessing own methods
 				proto = APP.BB.Router.prototype;
 
 			function getAction() {
@@ -151,7 +155,6 @@
 						viewAction = getAction(),
 						baseProto = win.APP.BB.BaseView.prototype,
 						d;
-						//battleData = win.APP.bb.battleData;
 
 					if ( !viewAction ) {
 						return originalFunctions[value].apply(router, arguments);

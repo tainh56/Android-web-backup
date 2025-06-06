@@ -16,72 +16,92 @@
 		},
 
 		initialize: function (jsMapKey, data) {
+			try {
 
-			if (win.APP.bb.router.isForce) {
-				return;
-			}
+				if (win.APP.bb.router.isForce) {
+					return;
+				}
 
-			data = data || {};
+				data = data || {};
 
-			var view = this,
-				mapType = data.type || 'skirmish';
+				var view = this,
+					mapType = data.type || 'skirmish';
 
-			view.set('jsMapKey', jsMapKey);
-			view.set('mapType', mapType);
+				view.set('jsMapKey', jsMapKey);
+				view.set('mapType', mapType);
 
-			if ( mapType === 'mission' ) {
+				if (mapType === 'mission') {
 
-				win.APP.map.db.getMapInfo({
-					jsMapKey: jsMapKey,
-					type: mapType
-				}).then(function (mapInfo) {
-
-					new win.APP.BB.BattleView({
+					win.APP.map.db.getMapInfo({
 						jsMapKey: jsMapKey,
-						type: mapType,
-						money: 500,
-						unitLimit: mapInfo.unitLimit,
-						players: [
-							{
-								teamNumber: 1,
-								id: 0,
-								type: 'player',
-								color: 'blue'
+						type: mapType
+					}).then(function (mapInfo) {
 
-							},
-							{
-								teamNumber: 2,
-								id: 1,
-								type: 'cpu',
-								color: 'red'
-							}
-						]
+						new win.APP.BB.BattleView({
+							jsMapKey: jsMapKey,
+							type: mapType,
+							money: 500,
+							unitLimit: mapInfo.unitLimit,
+							players: [
+								{
+									teamNumber: 1,
+									id: 0,
+									type: 'player',
+									color: 'blue'
+
+								},
+								{
+									teamNumber: 2,
+									id: 1,
+									type: 'cpu',
+									color: 'red'
+								}
+							]
+						});
+
+						view.navigate('battle');
+
 					});
 
-					view.navigate('battle');
+					return;
+				}
 
+				var mapInfoPromise = win.APP.map.db.getMapInfo({
+					jsMapKey: jsMapKey,
+					type: view.get('mapType')
 				});
 
-				return;
-			}
+				if (mapInfoPromise && typeof mapInfoPromise.then === 'function' && typeof mapInfoPromise.catch === 'function') {
+				} else {
+					return; // Stop if it's not a promise
+				}
 
-			win.APP.map.db.getMapInfo({
-				jsMapKey: jsMapKey,
-				type: view.get('mapType')
-			}).then(function (mapInfo) {
-				var viewData = view.createViewData(mapInfo);
-				view.$el = $(view.tmpl.skirmishSetupMap(viewData));
-				view.proto.initialize.apply(view, arguments);
-				view.render();
-			});
+				mapInfoPromise.then(function (mapInfo) { // This is an asynchronous callback
+					var viewData = view.createViewData(mapInfo);
+					view.$el = $(view.tmpl.skirmishSetupMap(viewData));
+					view.proto.initialize.apply(view, arguments);
+					view.render();
+
+				}).catch(function (error) {
+					console.error('[SkirmishSetupMapView initialize getMapInfo] Promise REJECTED:', error, error.stack ? error.stack : '(no stack)');
+				});
+			} catch (error) {
+				console.error('[SkirmishSetupMapView initialize] CRITICAL ERROR:', error, error.stack);
+			}
 
 		},
 
 		createViewData: function (map) {
 
 			var viewData = {},
-				//util = win.APP.util,
-				staticMapInfo = this.util.copyJSON(APP.map),
+				// Directly get needed properties from APP.map to avoid circular JSON issues.
+				// Assuming these properties are arrays of simple values, JSON.parse(JSON.stringify()) is a safe way to deep copy them individually.
+				staticMapInfo = {
+					playerColors: APP.map.playerColors ? JSON.parse(JSON.stringify(APP.map.playerColors)) : [],
+					playerTypes: APP.map.playerTypes ? JSON.parse(JSON.stringify(APP.map.playerTypes)) : [],
+					money: APP.map.money ? JSON.parse(JSON.stringify(APP.map.money)) : [],
+					unitsLimits: APP.map.unitsLimits ? JSON.parse(JSON.stringify(APP.map.unitsLimits)) : []
+				},
 				i, len,
 				playerData,
 				playersData = [],
@@ -97,7 +117,7 @@
 			for (i = 1, len = map.maxPlayers; i <= len; i += 1) {
 				playerData = {};
 				playerData.teamNumber = i;
-				playerData.color = colors[i-1];
+				playerData.color = colors[i - 1];
 				playersData.push(playerData);
 				playerData.type = playerType;
 			}

@@ -2,8 +2,8 @@
 (function (win, doc) {
 
 	'use strict';
-	/*global window, document, openDatabase */
-	/*global $, _ */
+	/*global window, document, Dexie */ // Replaced openDatabase with Dexie
+	/*global $, _, log */ // Added log for completeness if used elsewhere
 
 	win.APP.map = {
 		mapPackVersion: 4,
@@ -80,27 +80,42 @@
 			function preLoadImage(src, key) {
 
 				var deferred = $.Deferred(),
-					img = new Image();
+					img = new Image(),
+					onImageLoad, // Declare for correct removal
+					onImageError; // Declare for correct removal
 
-				function onceLoad() {
-					this.removeEventListener('load', onceLoad);
-					this.removeEventListener('error', onceLoad);
+				onImageLoad = function () {
+					// 'this' refers to the img object
+					this.removeEventListener('load', onImageLoad);
+					this.removeEventListener('error', onImageError);
 
-					var base64Scaled = win.APP.map.scaleImage(this, 4);
+					try {
+						var base64Scaled = win.APP.map.scaleImage(this, 4);
+						tiles[key] = {
+							base64: base64Scaled,
+							img: this // Store the successfully loaded image object
+						};
+						map.recountProgress();
+						deferred.resolve();
+					} catch (e) {
+						console.error('Error scaling image ' + src + ' for key ' + key + ':', e);
+						deferred.reject(e); // Reject if scaling fails
+					}
+				};
 
-					tiles[key] = {
-						base64: base64Scaled,
-						img: img
-					};
+				onImageError = function (event) {
+					// 'this' refers to the img object
+					this.removeEventListener('load', onImageLoad);
+					this.removeEventListener('error', onImageError);
+					console.error('Failed to load image ' + src + ' for key ' + key + '.', event);
+					// Do not call recountProgress for failed images
+					deferred.reject(new Error('Failed to load image: ' + src));
+				};
 
-					img.src = base64Scaled;
-					map.recountProgress();
-					deferred.resolve();
+				img.addEventListener('load', onImageLoad, false);
+				img.addEventListener('error', onImageError, false);
 
-				}
-
-				img.addEventListener('load', onceLoad, false);
-				img.addEventListener('error', onceLoad, false);
+				// Setting img.src last to ensure event listeners are attached.
 
 				img.src = src;
 
@@ -136,20 +151,33 @@
 			// just preload all images
 			function preLoadImage(src) {
 
-				var deferred = $.Deferred(),
-					img = new Image();
+				var deferred = $.Deferred(), // Renamed from 'deferred' to avoid conflict if any outer scope var has same name
+					img = new Image(),
+					onImageLoad, // Declare for correct removal
+					onImageError; // Declare for correct removal
 
-				function onceLoad() {
-					this.removeEventListener('load', onceLoad);
-					this.removeEventListener('error', onceLoad);
-					win.APP.allImagesCache[this.src] = this;
+				onImageLoad = function () {
+					// 'this' refers to the img object
+					this.removeEventListener('load', onImageLoad);
+					this.removeEventListener('error', onImageError);
+					win.APP.allImagesCache[src] = this; // Use the original src path as key
 					map.recountProgress();
 					deferred.resolve();
-				}
+				};
 
-				img.addEventListener('load', onceLoad, false);
-				img.addEventListener('error', onceLoad, false);
+				onImageError = function (event) {
+					// 'this' refers to the img object
+					this.removeEventListener('load', onImageLoad);
+					this.removeEventListener('error', onImageError);
+					console.error('Failed to pre-cache image ' + src + '.', event);
+					// Do not call recountProgress for failed images
+					deferred.reject(new Error('Failed to pre-cache image: ' + src));
+				};
 
+				img.addEventListener('load', onImageLoad, false);
+				img.addEventListener('error', onImageError, false);
+
+				// Setting img.src last to ensure event listeners are attached.
 				img.src = src;
 
 				return deferred.promise();
@@ -183,13 +211,24 @@
 
 			this.progressLength = win.APP.allImages.length + _.keys(win.APP.mapTiles).length + _.keys(win.APP.mapTilesPreview).length + _.keys(win.APP.maps).length;
 
-			return this.prepareTiles(win.APP.mapTiles)
+			// Wrap jQuery promises with Promise.resolve() to ensure a native Promise chain
+			return Promise.resolve(this.prepareTiles(win.APP.mapTiles))
 				.then(function () {
-					return win.APP.map.prepareTiles(win.APP.mapTilesPreview);
+					// win.APP.map.prepareTiles also returns a jQuery promise
+					return Promise.resolve(win.APP.map.prepareTiles(win.APP.mapTilesPreview));
 				}).then(function () {
+                    // win.APP.map.db.init() returns a native Promise, so it integrates directly
                     return win.APP.map.db.init();
 				}).then(function () {
-                    return win.APP.map.preCacheImages();
+					// win.APP.map.preCacheImages returns a jQuery promise
+                    return Promise.resolve(win.APP.map.preCacheImages());
+				}).then(function () {
+					return Promise.resolve(); // Ensure a resolved promise is returned
+				}).catch(function (err) { // .catch will now operate on a native Promise
+					console.error('[MAP PRELOAD] Error during preloadData chain:', err);
+					// It's important to re-throw the error if you want calling code to know about it
+					// or handle it specifically if this is the final catch.
+					throw err;
 				});
 
 		},
@@ -319,395 +358,268 @@
 			description: 'AE2 DB',
 			size: 1024 * 1024 * 15, // 1024 x 1024 x 20 = 1MB x 15 = 15MB
 			db: false, // field for db
-			skirmishMaps: 'skirmish',
-			missionMaps: 'mission',
+			// Use constants for table names for easier maintenance
+			SKIRMISH_MAPS_TABLE: 'skirmish', // Changed from skirmishMaps to avoid conflict with property name
+			MISSION_MAPS_TABLE: 'mission',   // Changed from missionMaps
 			savedGame: 'savedGame',
 			userMap: 'userMap',
 
 			init: function () {
-
 				var dbMaster = this,
-					deferred = $.Deferred(),
-                    db = openDatabase(dbMaster.name, dbMaster.version, dbMaster.description, dbMaster.size),
 					map = win.APP.map,
 					info = win.APP.info,
 					currentMapVersion = map.mapPackVersion,
 					previousMapVersion = info.get('mapPackVersion') || 0;
 
-				dbMaster.db = db;
-
-				// create tablet if needed
-				db.transaction(function (tx) {
-
-					var missionDeferred = $.Deferred(),
-						skirmishDeferred = $.Deferred();
-
-					function createMissionMapTables() {
-						tx.executeSql('CREATE TABLE IF NOT EXISTS ' + dbMaster.missionMaps + ' (jsMapKey TEXT, info TEXT, map TEXT)', [], function () {
-							missionDeferred.resolve();
-						}, function (e) {
-							//log(e);
-						});
-					}
-
-					function createSkirmishMapTables() {
-						tx.executeSql('CREATE TABLE IF NOT EXISTS ' + dbMaster.skirmishMaps + ' (jsMapKey TEXT, info TEXT, map TEXT)', [], function () {
-							skirmishDeferred.resolve();
-						}, function (e) {
-							//log(e);
-						});
-					}
-
-					$.when(missionDeferred, skirmishDeferred).done(function () {
-						dbMaster.prepareDefaultMap().then(function () {
-                            deferred.resolve();
-						});
-					});
-
-					// Update maps for next mapPack
-					if (currentMapVersion > previousMapVersion) { // remove all maps
-						info.set('mapPackVersion', currentMapVersion);
-						tx.executeSql('DROP TABLE IF EXISTS ' + dbMaster.skirmishMaps, createSkirmishMapTables, createSkirmishMapTables);
-					} else {
-						createSkirmishMapTables();
-					}
-
-					createMissionMapTables();
-
-					tx.executeSql('CREATE TABLE IF NOT EXISTS ' + dbMaster.savedGame + ' (date TEXT, name TEXT, game TEXT)', [], null, null);
-					tx.executeSql('CREATE TABLE IF NOT EXISTS ' + dbMaster.userMap + ' (jsMapKey TEXT, info TEXT, map TEXT)', [], null, null);
-
+				// Initialize Dexie
+				dbMaster.db = new Dexie(dbMaster.name);
+				// Define the schema. Version number should be incremented if schema (tables, indexes) changes.
+				dbMaster.db.version(1).stores({
+					[dbMaster.SKIRMISH_MAPS_TABLE]: 'jsMapKey', // jsMapKey as primary key
+					[dbMaster.MISSION_MAPS_TABLE]: 'jsMapKey',
+					[dbMaster.savedGame]: 'name,date',    // name as primary key, date as index
+					[dbMaster.userMap]: 'jsMapKey'
 				});
 
-                return deferred.promise();
+				// Dexie opens the database automatically on first operation or by calling db.open()
+				// db.open() is not strictly necessary here if we perform operations immediately.
 
+				return new Promise(function (resolve, reject) {
+					var dbPreparationPromise;
+
+					if (currentMapVersion > previousMapVersion) { // remove all maps
+						info.set('mapPackVersion', currentMapVersion);
+						// Clear the skirmishMaps table, then repopulate all maps.
+						dbPreparationPromise = dbMaster.db.table(dbMaster.SKIRMISH_MAPS_TABLE).clear()
+							.then(function () {
+								return dbMaster.prepareDefaultMap();
+							});
+					} else {
+						dbPreparationPromise = dbMaster.prepareDefaultMap();
+					}
+					dbPreparationPromise.then(resolve).catch(function(e) {
+						console.error("Database initialization or map preparation failed:", e);
+						reject(e);
+					});
+				});
 			},
 
 			prepareDefaultMap: function () {
-
 				var maps = win.APP.maps,
 					dbMaster = this,
-					deferred = $.Deferred(),
-					promise = deferred.promise(),
-                    mainDeferred = $.Deferred();
+					mapObj = win.APP.map;
 
-				_.each(maps, function (map, jsMapKey) {
-					promise = promise.then(function () {
-						return dbMaster.prepareMap(map, jsMapKey);
-					});
+				var mapKeys = _.keys(maps); // Get keys before iteration as maps object is modified
+				var chain = Promise.resolve();
+
+				mapKeys.forEach(function (jsMapKey) {
+					var mapDataToProcess = maps[jsMapKey]; // Capture current map data
+					if (mapDataToProcess) {
+						chain = chain.then(function () {
+							return dbMaster.prepareMap(mapDataToProcess, jsMapKey)
+								.then(function() {
+									// Cleanup and progress update after each map is processed
+									if (win.APP.maps[jsMapKey]) { // Check if not already deleted
+										win.APP.maps[jsMapKey] = null;
+										delete win.APP.maps[jsMapKey];
+									}
+									mapObj.recountProgress();
+								});
+						});
+					}
 				});
-
-                promise.then(function () {
-                    mainDeferred.resolve();
-                });
-
-				deferred.resolve();
-
-                return mainDeferred.promise();
-
+				return chain;
 			},
 
-            prepareMap: function (map, jsMapKey) {
+            prepareMap: function (mapDataToProcess, jsMapKey) {
+                var dbMaster = this;
+                var tableToUse = mapDataToProcess.type === dbMaster.SKIRMISH_MAPS_TABLE ? dbMaster.SKIRMISH_MAPS_TABLE : dbMaster.MISSION_MAPS_TABLE;
 
-                var dbMaster = this,
-                    db = dbMaster.db,
-                    mapObj = win.APP.map,
-                    deferred = $.Deferred();
-
-                db.transaction(function (tx) {
-                    tx.executeSql('SELECT * FROM ' + map.type + ' WHERE jsMapKey=?', [jsMapKey], function (tx, results) {
-                        if (results.rows.length) {
-                            dbMaster.compareMap(results.rows.item(0), map, jsMapKey).then(function () {
-                                win.APP.maps[jsMapKey] = null;
-                                delete win.APP.maps[jsMapKey];
-                                mapObj.recountProgress();
-                                deferred.resolve();
-                            });
-                            return;
+                return dbMaster.db.table(tableToUse).get(jsMapKey)
+                    .then(function (existingMapRow) {
+                        if (existingMapRow) {
+                            return dbMaster.compareMap(existingMapRow, mapDataToProcess, jsMapKey);
+                        } else {
+                            return dbMaster.insertMap(mapDataToProcess, jsMapKey);
                         }
-                        dbMaster.insertMap(map, jsMapKey).then(function () {
-                            win.APP.maps[jsMapKey] = null;
-                            delete win.APP.maps[jsMapKey];
-                            mapObj.recountProgress();
-                            deferred.resolve();
-                        });
                     });
-                });
-
-                return deferred.promise();
-
             },
 
-        	compareMap: function (oldMap, newMap, jsMapKey) {
-
-				var maps = win.APP.maps,
-					dbMaster = this,
-					deferred = $.Deferred(),
-					db = dbMaster.db,
-					oldMapData = JSON.parse(oldMap.map),
-					newMapVersion = newMap.version || 0,
-					oldMapVersion = oldMapData.version || 0,
+        	compareMap: function (oldMapRow, newMapData, jsMapKey) {
+				var dbMaster = this,
+					oldMap = JSON.parse(oldMapRow.map), // oldMapRow is {jsMapKey, info, map} from DB
+					newMapVersion = newMapData.version || 0,
+					oldMapVersion = oldMap.version || 0,
 					savedProperties = ['isOpen', 'isDone', 'isDoneByDifficult_easy', 'isDoneByDifficult_normal', 'isDoneByDifficult_hard'];
 
 				if (oldMapVersion >= newMapVersion) {
-					deferred.resolve();
-					return deferred.promise();
+					return Promise.resolve(); // No update needed
 				}
 
-				// get done state
+				// Preserve properties by merging into newMapData before stringifying
 				_.each(savedProperties, function (property) {
-					if (!oldMapData.hasOwnProperty(property)) {
-						return;
+					if (oldMap.hasOwnProperty(property)) {
+						newMapData[property] = oldMap[property];
 					}
-					newMap[property] = oldMapData[property];
 				});
 
-				dbMaster.removeMap({
-					type: newMap.type,
-					jsMapKey: jsMapKey
-				}).then(function () {
-					dbMaster.insertMap(newMap, jsMapKey);
-					deferred.resolve();
-				});
-				return deferred.promise();
-
+				// insertMap will stringify the updated newMapData
+				return dbMaster.insertMap(newMapData, jsMapKey); // This will effectively 'put' or update
 			},
 
-			insertMap: function (map, jsMapKey) { // map
+			insertMap: function (mapData, jsMapKey) {
+				var dbMaster = this,
+					info = JSON.parse(JSON.stringify(mapData)); // Create a deep copy for info
 
-				var maps = win.APP.maps,
-					deferred = $.Deferred(),
-					dbMaster = this,
-					db = dbMaster.db,
-					info;
-
-				info = JSON.parse(JSON.stringify(map));
-
-				info.units = null;
+				// Remove large fields from the 'info' object to be stored
 				delete info.units;
-				info.buildings = null;
 				delete info.buildings;
-				info.terrain = null;
 				delete info.terrain;
 
-				db.transaction(function (tx) {
-					tx.executeSql('INSERT INTO ' + map.type + ' (jsMapKey, info, map) values(?, ?, ?)', [jsMapKey, JSON.stringify(info), JSON.stringify(map)], function () {
-						deferred.resolve();
-					}, null);
-				});
+				var record = {
+					jsMapKey: jsMapKey,
+					info: JSON.stringify(info),
+					map: JSON.stringify(mapData) // Store the full mapData object
+				};
 
-				maps[jsMapKey] = null;
-				delete maps[jsMapKey];
-
-				return deferred.promise();
-
+                var tableToUse = mapData.type === dbMaster.SKIRMISH_MAPS_TABLE ? dbMaster.SKIRMISH_MAPS_TABLE : dbMaster.MISSION_MAPS_TABLE;
+				return dbMaster.db.table(tableToUse).put(record);
 			},
 
 			removeMap: function (data) {
-
 				var dbMaster = this,
-					db = dbMaster.db,
-					type = data.type,
-					jsMapKey = data.jsMapKey,
-					deferred = $.Deferred();
+					type = data.type === dbMaster.SKIRMISH_MAPS_TABLE ? dbMaster.SKIRMISH_MAPS_TABLE : dbMaster.MISSION_MAPS_TABLE,
+					jsMapKey = data.jsMapKey;
 
-				db.transaction(function (tx) {
-					tx.executeSql('DELETE FROM ' + type + ' WHERE jsMapKey = ?', [jsMapKey], function () {
-						deferred.resolve();
-					}, function () {
-						deferred.resolve();
-					});
+				return dbMaster.db.table(type).delete(jsMapKey).catch(function() {
+					return Promise.resolve(); // Resolve even if delete fails (e.g., item not found)
 				});
-
-				return deferred.promise();
-
 			},
 
 			removeSave: function (name) {
-
-				var dbMaster = this,
-					db = dbMaster.db,
-					deferred = $.Deferred();
-
-				db.transaction(function (tx) {
-					tx.executeSql('DELETE FROM ' + dbMaster.savedGame + ' WHERE name = ?', [name], function () {
-						deferred.resolve();
-					}, function () {
-						deferred.resolve();
-					});
+				var dbMaster = this;
+				return dbMaster.db.table(dbMaster.savedGame).delete(name).catch(function() {
+					return Promise.resolve();
 				});
-
-				return deferred.promise();
-
 			},
 
 			getMapsInfo: function (data) {
-
 				data = data || {};
-
 				var dbMaster = this,
-					deferred = $.Deferred(),
-					db = dbMaster.db,
 					mapsInfo = {};
+				data.type = data.type || dbMaster.SKIRMISH_MAPS_TABLE;
+                var tableToUse = data.type === dbMaster.SKIRMISH_MAPS_TABLE ? dbMaster.SKIRMISH_MAPS_TABLE : dbMaster.MISSION_MAPS_TABLE;
 
-				data.type = data.type || dbMaster.skirmishMaps;
-
-				db.transaction(function (tx) {
-					tx.executeSql('SELECT * FROM ' + data.type + ' ORDER BY jsMapKey ASC', [], function (tx, results) {
-						var i, len, row;
-						for (i = 0, len = results.rows.length; i < len; i += 1) {
-							row = results.rows.item(i);
+				return dbMaster.db.table(tableToUse).orderBy('jsMapKey').toArray()
+					.then(function (results) {
+						results.forEach(function (row) {
 							mapsInfo[row.jsMapKey] = JSON.parse(row.info);
-						}
-						deferred.resolve(mapsInfo);
+						});
+						return mapsInfo;
 					});
-				});
-
-				return deferred.promise();
-
 			},
 
 			getMapInfo: function (data) {
-
 				data = data || {};
+				var dbMaster = this;
+				data.type = data.type || dbMaster.SKIRMISH_MAPS_TABLE;
+                var tableToUse = data.type === dbMaster.SKIRMISH_MAPS_TABLE ? dbMaster.SKIRMISH_MAPS_TABLE : dbMaster.MISSION_MAPS_TABLE;
 
-				var dbMaster = this,
-					deferred = $.Deferred(),
-					db = dbMaster.db;
-
-				data.type = data.type || dbMaster.skirmishMaps;
-
-				db.transaction(function (tx) {
-					tx.executeSql('SELECT * FROM ' + data.type + ' WHERE jsMapKey=?', [data.jsMapKey], function (tx, results) {
-
-						var row = results.rows.item(0),
-							mapInfo = JSON.parse(row.info);
-
-						deferred.resolve(mapInfo);
-
+				return dbMaster.db.table(tableToUse).get(data.jsMapKey)
+					.then(function (row) {
+						if (row) {
+							return JSON.parse(row.info);
+						}
+						return null; // Or throw an error if map not found is unexpected
 					});
-				});
-
-				return deferred.promise();
-
 			},
 
 			getMap: function (data) {
-
 				data = data || {};
+				var dbMaster = this;
+				data.type = data.type || dbMaster.SKIRMISH_MAPS_TABLE;
+                var tableToUse = data.type === dbMaster.SKIRMISH_MAPS_TABLE ? dbMaster.SKIRMISH_MAPS_TABLE : dbMaster.MISSION_MAPS_TABLE;
 
-				var dbMaster = this,
-					deferred = $.Deferred(),
-					db = dbMaster.db;
-
-				data.type = data.type || dbMaster.skirmishMaps;
-
-				db.transaction(function (tx) {
-					tx.executeSql('SELECT * FROM ' + data.type + ' WHERE jsMapKey=?', [data.jsMapKey], function (tx, results) {
-
-						var row = results.rows.item(0),
-							map = JSON.parse(row.map);
-
-						deferred.resolve(map);
-
+				return dbMaster.db.table(tableToUse).get(data.jsMapKey)
+					.then(function (row) {
+						if (row && row.map) { // Check if row and row.map exist
+							try {
+								var parsedMap = JSON.parse(row.map);
+								// console.log('[getMap] Successfully parsed map:', data.jsMapKey); // Optional: for successful parsing
+								return parsedMap;
+							} catch (e) {
+								console.error('[getMap] Failed to parse map data from DB for jsMapKey: ' + data.jsMapKey, e);
+								console.error('[getMap] Problematic map string for ' + data.jsMapKey + ':', row.map);
+								// Reject the promise so the caller's .catch() is triggered
+								return Promise.reject(new Error('Parse failed for map ' + data.jsMapKey + ': ' + e.message));
+							}
+						}
+						// If row is null, or row.map is null/undefined, map is not found or data is incomplete.
+						console.warn('[getMap] Map data not found or incomplete in DB for jsMapKey: ' + data.jsMapKey + '. Row:', row);
+						return null; // Map not found or incomplete, resolve with null
+					})
+					.catch(function(err){ // Catch errors from Dexie .get() or from the Promise.reject in the .then() block
+						console.error('[getMap] Error during getMap operation for ' + data.jsMapKey + ':', err);
+						throw err; // Re-throw the error to be handled by the caller's .catch()
 					});
-				});
-
-				return deferred.promise();
-
 			},
 
 			getMapList: function (data) {
-
+				// This function seems identical to getMapsInfo, can be aliased or removed if so.
+				// Assuming it's meant to be the same for now.
 				data = data || {};
-
-				var dbMaster = this,
-					deferred = $.Deferred(),
-					db = dbMaster.db,
-					mapsInfo = {};
-
-				data.type = data.type || dbMaster.skirmishMaps;
-
-				db.transaction(function (tx) {
-					tx.executeSql('SELECT * FROM ' + data.type + ' ORDER BY jsMapKey ASC', [], function (tx, results) {
-						var i, len, row;
-						for (i = 0, len = results.rows.length; i < len; i += 1) {
-							row = results.rows.item(i);
-							mapsInfo[row.jsMapKey] = JSON.parse(row.info);
-						}
-						deferred.resolve(mapsInfo);
-					});
-				});
-
-				return deferred.promise();
-
+				var dbMaster = this;
+				data.type = data.type || dbMaster.SKIRMISH_MAPS_TABLE;
+				return dbMaster.getMapsInfo(data); // Re-use getMapsInfo
 			},
 
 			getAllMapList: function (data) {
-
 				data = data || {};
+				var dbMaster = this;
+				data.type = data.type || dbMaster.SKIRMISH_MAPS_TABLE;
+                var tableToUse = data.type === dbMaster.SKIRMISH_MAPS_TABLE ? dbMaster.SKIRMISH_MAPS_TABLE : dbMaster.MISSION_MAPS_TABLE;
 
-				var dbMaster = this,
-					deferred = $.Deferred(),
-					db = dbMaster.db,
-					mapsInfo = {};
-
-				data.type = data.type || dbMaster.skirmishMaps;
-
-				db.transaction(function (tx) {
-					tx.executeSql('SELECT * FROM ' + data.type + ' ORDER BY jsMapKey ASC', [], function (tx, results) {
-						var i, len, row;
-						for (i = 0, len = results.rows.length; i < len; i += 1) {
-							row = results.rows.item(i);
-							mapsInfo[row.jsMapKey] = JSON.parse(row.map);
-						}
-						deferred.resolve(mapsInfo);
+				return dbMaster.db.table(tableToUse).orderBy('jsMapKey').toArray()
+					.then(function (results) {
+						var mapsData = {};
+						results.forEach(function (row) {
+							mapsData[row.jsMapKey] = JSON.parse(row.map);
+						});
+						return mapsData;
 					});
-				});
-
-				return deferred.promise();
-
 			},
 
 			openMap: function (openMaps) {
-
 				var dbMaster = this;
-
 				_.each(openMaps, function (mapData) {
 					dbMaster.getMap(mapData).then(function (map) {
-						map.isOpen = true;
-						dbMaster.removeMap(mapData).then(function () {
-							dbMaster.insertMap(map, mapData.jsMapKey);
-						});
+						if (map) {
+							map.isOpen = true;
+							// insertMap now uses 'put' which handles update
+							return dbMaster.insertMap(map, mapData.jsMapKey);
+						}
 					});
 				});
-
 			},
 
 			setMapDone: function (mapData) {
-
 				var dbMaster = this,
 					difficultLevel = win.APP.info.get('difficult');
 
 				dbMaster.getMap(mapData).then(function (map) {
-
-					map.isDone = true;
-					map['isDoneByDifficult_' + difficultLevel] = true;
-
-					dbMaster.removeMap(mapData).then(function () {
-						dbMaster.insertMap(map, mapData.jsMapKey);
-					});
-
+					if (map) {
+						map.isDone = true;
+						map['isDoneByDifficult_' + difficultLevel] = true;
+						// insertMap now uses 'put' which handles update
+						return dbMaster.insertMap(map, mapData.jsMapKey);
+					}
 				});
-
 			},
 
 			saveGame: function (date, name, data) {
+				var dbMaster = this;
 
-				var dbMaster = this,
-					deferred = $.Deferred(),
-					db = dbMaster.db;
-
+				// Sanitize briefing data as in original
 				_.each(data.map, function (value, key) {
 					if (!/briefing/i.test(key)) { // save briefing only
 						return;
@@ -725,72 +637,42 @@
 					});
 				});
 
-				dbMaster
-					.removeSave(name)
-					.then(function () {
-						db.transaction(function (tx) {
-							tx.executeSql('INSERT INTO ' + dbMaster.savedGame + ' (date, name, game) values(?, ?, ?)', [date, name, JSON.stringify(data)], function () {
-								deferred.resolve();
-							}, null);
-						});
-					});
-
-				return deferred.promise();
-
+				var record = {
+					name: name, // primary key
+					date: date,
+					game: JSON.stringify(data)
+				};
+				return dbMaster.db.table(dbMaster.savedGame).put(record);
 			},
 
 			getSavedGames: function () {
-
-				var dbMaster = this,
-					deferred = $.Deferred(),
-					db = dbMaster.db,
-					saves = [];
-
-				db.transaction(function (tx) {
-					tx.executeSql('SELECT * FROM ' + dbMaster.savedGame + ' ORDER BY date DESC', [], function (tx, results) {
-						var i, len, row;
-						for (i = 0, len = results.rows.length; i < len; i += 1) {
-							row = results.rows.item(i);
-							saves.push(row.name);
-						}
-						deferred.resolve(saves);
+				var dbMaster = this;
+				return dbMaster.db.table(dbMaster.savedGame)
+					.orderBy('date')
+					.reverse() // Dexie sorts ascending by default, then reverse for DESC
+					.toArray()
+					.then(function (results) {
+						return results.map(function (row) {
+							return row.name;
+						});
 					});
-				});
-
-				return deferred.promise();
-
 			},
 
 			getSavedGame: function (gameName) {
-
-				var dbMaster = this,
-					deferred = $.Deferred(),
-					db = dbMaster.db;
-
-				db.transaction(function (tx) {
-					tx.executeSql('SELECT * FROM ' + dbMaster.savedGame + ' WHERE name=?', [gameName], function (tx, results) {
-						deferred.resolve(results.rows.item(0));
-					});
-				});
-
-				return deferred.promise();
-
+				var dbMaster = this;
+				return dbMaster.db.table(dbMaster.savedGame).get(gameName);
+				// This will return the game object or undefined if not found.
+				// The original returned results.rows.item(0) which could be null.
+				// Dexie's get returns undefined for no match, which is fine.
 			},
 
 			mapIsExist: function (data) {
-
-				var dbMaster = this,
-					deferred = $.Deferred(),
-					db = dbMaster.db;
-
-				db.transaction(function (tx) {
-					tx.executeSql('SELECT * FROM ' + data.type + ' WHERE jsMapKey=?', [data.jsMapKey], function (tx, results) {
-						deferred.resolve(Boolean(results.rows.length));
+				var dbMaster = this;
+                var tableToUse = data.type === dbMaster.SKIRMISH_MAPS_TABLE ? dbMaster.SKIRMISH_MAPS_TABLE : dbMaster.MISSION_MAPS_TABLE;
+				return dbMaster.db.table(tableToUse).get(data.jsMapKey)
+					.then(function (result) {
+						return Boolean(result);
 					});
-				});
-
-				return deferred.promise();
-
 			}
 
 		}
