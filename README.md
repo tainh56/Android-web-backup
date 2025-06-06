@@ -28,11 +28,11 @@ docker build -t ancient-empires-web .
 
 ### Running the Docker Container
 
-Once the image is built, you can run it as a container. The application uses `http-server` to serve the AE2 game files.
+Once the image is built, you can run it as a container. The application uses `http-server` to serve the game files.
 
-**Running AE2 on port 8080:**
+**Running the game on port 8080:**
 
-The Docker image is configured to run the `AE2` game version by default.
+The Docker image is configured to run the game by default.
 ```bash
 docker run -d -p 8080:8080 --name ancient-empires-server ancient-empires-web
 ```
@@ -42,21 +42,11 @@ This command will:
 *   Map port 8080 of the container to port 8080 on your host machine (`-p 8080:8080`).
 *   Name the container `ancient-empires-server` for easier management.
 *   Use the `ancient-empires-web` image you built.
-*   Start the server for "Ancient Empires II" (AE2) by default (executing `npm run AE2` inside the container).
-
-**Customizing the Game Version:**
-
-To run a different game version (e.g., `AE1`), you can override the default command when running the container:
-
-```bash
-docker run -d -p 8080:8080 --name ancient-empires-ae1 ancient-empires-web AE1
-```
-This will execute `npm run AE1` inside the container. Replace `AE1` with the desired game script name defined in your `package.json`.
+*   Start the server for "Ancient Empires II" (AE2) by default (executing `npm start` inside the container).
 
 **Customizing the Host Port:**
 
 If port 8080 is already in use on your host, or you prefer a different port, you can change the port mapping. For example, to use host port 8081:
-
 ```bash
 docker run -d -p 8081:8080 --name ancient-empires-server ancient-empires-web
 ```
@@ -70,7 +60,7 @@ After starting the container, open your web browser and navigate to `http://loca
 
 To stop the container:
 ```bash
-docker stop ancient-empires-server # Or the name you used, e.g., ancient-empires-ae1
+docker stop ancient-empires-server # Or the name you used, e.g., ancient-empires-web
 ```
 
 To remove the container (after stopping it):
@@ -105,26 +95,15 @@ This command will:
 
 The `docker-compose.yml` file is configured to use environment variables for customization:
 
-*   `GAME_VERSION`: Specifies the game version script to run (e.g., `AE1`, `AE2`). Defaults to `AE2`. This will be passed to `npm run <GAME_VERSION>`.
 *   `HOST_PORT`: Specifies the host port to map to the container's port 8080. Defaults to `8080`.
 
 You can set these environment variables before running `docker-compose up`.
 
 **Examples:**
 
-*   Run AE1 on the default host port (8080):
-    ```bash
-    GAME_VERSION=AE1 docker-compose up -d
-    ```
-
-*   Run the default AE2 on host port 8081:
+*   Run the game on host port 8081:
     ```bash
     HOST_PORT=8081 docker-compose up -d
-    ```
-
-*   Run AE1 on host port 8081:
-    ```bash
-    GAME_VERSION=AE1 HOST_PORT=8081 docker-compose up -d
     ```
 
 **Accessing the Game:**
