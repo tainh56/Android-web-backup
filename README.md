@@ -1,66 +1,154 @@
-# Ancient Empires source code backup (Android & web versions)
-This repository provides the backup of source code for the Ancient Empires Android & web versions, as well as the APK files of the Android version.
+# Ancient Empires II Web
 
-* [Original repository](https://github.com/webbestmaster/main) (by [webbestmaster](https://github.com/webbestmaster))
-* [Fork repository](https://github.com/ancient-empires-resources/webbestmaster-backup)
+This project hosts the web server for Ancient Empires II (AE2).
+*(You can add more general information about your project here, like a brief description, link to the game, etc.)*
 
-## Download Android version
+## Prerequisites for Local Development (Without Docker)
 
-Go to the **`apk`** directory to download the Android version.
+*   Node.js (version >= 12.0.0, as per Dockerfile, Node 18 LTS is recommended)
+*   npm (usually comes with Node.js)
 
-## Running the web version on PC
+To set up and run locally: `npm install`, then `npm start`.
 
-This game is designed to run in [Android WebView](https://developer.chrome.com/docs/multidevice/webview/), a Chrome-based built-in component on Android phones for displaying web content. Hence it can also be run in a PC web browser.
+## Running with Docker
+
+You can run Ancient Empires II Web using Docker. This provides a consistent environment for the application.
 
 ### Prerequisites
 
-To run the AE1 and AE2 games in web browser, you must have all these prerequisites ready:
+*   Docker installed on your system.
 
-1. A web browser that supports [Web SQL](https://www.w3.org/TR/webdatabase/), such as [Google Chrome](https://chrome.google.com).
-2. The "[User-Agent Switcher and Manager](https://chrome.google.com/webstore/detail/user-agent-switcher-and-m/bhchdcejhohfmigjafbampogmaanbfkg)" browser extension for Chrome.
-3. [Node.js](https://nodejs.org/en/download/) version >= 12.0.0.
-4. [`http-server`](https://www.npmjs.com/package/http-server) NPM package.
+### Building the Docker Image
 
-### How to setup & start the game
+First, build the Docker image from the `Dockerfile` in the project root. It's a good practice to tag your image:
 
-1. **Install Node.js.**
+```bash
+docker build -t ancient-empires-web .
+```
 
-    You may visit https://nodejs.org/en/download/ to download and install the Node.js that is suitable for your operating system.
-    * For example, in Ubuntu, the most convenient version is the snap version, which can be installed using
-        ```shell
-        sudo snap install node --classic
-        ```
-2. **Install NPM packages.**
+### Running the Docker Container
 
-    You may run
-    ```shell
-    npm install
+Once the image is built, you can run it as a container. The application uses `http-server` to serve the AE2 game files.
+
+**Running AE2 on port 8080:**
+
+The Docker image is configured to run the `AE2` game version by default.
+```bash
+docker run -d -p 8080:8080 --name ancient-empires-server ancient-empires-web
+```
+
+This command will:
+*   Run the container in detached mode (`-d`).
+*   Map port 8080 of the container to port 8080 on your host machine (`-p 8080:8080`).
+*   Name the container `ancient-empires-server` for easier management.
+*   Use the `ancient-empires-web` image you built.
+*   Start the server for "Ancient Empires II" (AE2) by default (executing `npm run AE2` inside the container).
+
+**Customizing the Game Version:**
+
+To run a different game version (e.g., `AE1`), you can override the default command when running the container:
+
+```bash
+docker run -d -p 8080:8080 --name ancient-empires-ae1 ancient-empires-web AE1
+```
+This will execute `npm run AE1` inside the container. Replace `AE1` with the desired game script name defined in your `package.json`.
+
+**Customizing the Host Port:**
+
+If port 8080 is already in use on your host, or you prefer a different port, you can change the port mapping. For example, to use host port 8081:
+
+```bash
+docker run -d -p 8081:8080 --name ancient-empires-server ancient-empires-web
+```
+This maps port 8080 inside the container (where `http-server` listens) to port 8081 on your host.
+
+**Accessing the Game:**
+
+After starting the container, open your web browser and navigate to `http://localhost:HOST_PORT` (e.g., `http://localhost:8080` or `http://localhost:8081` depending on your configuration).
+
+**Stopping and Removing the Container:**
+
+To stop the container:
+```bash
+docker stop ancient-empires-server # Or the name you used, e.g., ancient-empires-ae1
+```
+
+To remove the container (after stopping it):
+```bash
+docker rm ancient-empires-server # Or the name you used
+```
+
+## Running with Docker Compose
+
+For easier management, especially with configuration options and multi-container setups (if you expand in the future), you can use Docker Compose.
+
+### Prerequisites
+
+*   Docker installed.
+*   Docker Compose installed (usually included with Docker Desktop).
+
+### Building and Starting the Service
+
+Navigate to the project root directory (where `docker-compose.yml` is located) and run:
+
+**Default (AE2 on host port 8080):**
+```bash
+docker-compose up -d
+```
+This command will:
+*   Build the image using the `Dockerfile` and tag it as `ancient-empires-web-compose` (as specified in `docker-compose.yml`).
+*   Start the `app` service in detached mode (`-d`).
+*   The container will be named `ancient-empires-server`.
+*   It will restart `unless-stopped`.
+
+**Customizing with Environment Variables:**
+
+The `docker-compose.yml` file is configured to use environment variables for customization:
+
+*   `GAME_VERSION`: Specifies the game version script to run (e.g., `AE1`, `AE2`). Defaults to `AE2`. This will be passed to `npm run <GAME_VERSION>`.
+*   `HOST_PORT`: Specifies the host port to map to the container's port 8080. Defaults to `8080`.
+
+You can set these environment variables before running `docker-compose up`.
+
+**Examples:**
+
+*   Run AE1 on the default host port (8080):
+    ```bash
+    GAME_VERSION=AE1 docker-compose up -d
     ```
-    in this directory to install all the NPM packages needed.
-3. **Run HTTP server.**
 
-    The two scripts below use the [`http-server`](https://npmjs.com/package/http-server) package.
-    * For Ancient Empires 1, run:
-        ```shell
-        npm run AE1
-        ```
-    * For Ancient Empires 2, run:
-        ```shell
-        npm run AE2
-        ```
+*   Run the default AE2 on host port 8081:
+    ```bash
+    HOST_PORT=8081 docker-compose up -d
+    ```
 
-    After starting the server, there will be a list of servers available as shown in the console.
-    * http://127.0.0.1:8080 refers to localhost. *You are advised to use this address to start the game.*
-    * If you have connected to WiFi or Ethernet to access the Internet, the IP address of your PC will also be displayed in the list. *However these addresses are not recommended for use as they are unstable.*
-    * In order to save your progress, you must launch the game using the **same server address and port number** every time.
-    * If http://127.0.0.1:8080 is occupied, the server will be started on port 8081, 8082, …, etc. But you will not retrieve your existing progress. *So it is recommended that you ensure that the port 8080 on your PC is ready for use.*
-4. **Start browser to play the game.**
+*   Run AE1 on host port 8081:
+    ```bash
+    GAME_VERSION=AE1 HOST_PORT=8081 docker-compose up -d
+    ```
 
-    Open Google Chrome.
+**Accessing the Game:**
 
-    Then click on "**User-Agent Switcher and Manager**", select one of the Android user agents.
+Open your web browser and navigate to `http://localhost:HOST_PORT` (e.g., `http://localhost:8080` if `HOST_PORT` is not set, or `http://localhost:8081` if you set `HOST_PORT=8081`).
 
-    After that, copy and paste the server address you saw in the console into the browser address bar to launch the game.
-5. **After finishing, stop the server.**
+**Viewing Logs:**
 
-    After you finish playing the game and close the browser, go back to the console and press `Ctrl`+`C` to stop the server.
+To view the logs from the running service:
+```bash
+docker-compose logs -f
+```
+
+**Stopping and Removing Services:**
+
+To stop and remove the containers, networks, and the image created by `docker-compose up`:
+```bash
+docker-compose down
+```
+If you want to remove the image as well, you can add the `--rmi all` flag:
+```bash
+docker-compose down --rmi all
+```
+
+## License
+
+This project is licensed under the GNU General Public License v3.0 - see the LICENSE file for details.

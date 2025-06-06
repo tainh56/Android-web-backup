@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  app:
+    # Build the Docker image using the Dockerfile in the current directory (.)
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # Optionally, assign a name to the image built by Compose
+    image: ancient-empires-ii-web-compose
+
+    # Port mapping: Expose port 8080 of the container to a port on the host.
+    # Defaults to host port 8080. Can be overridden by setting HOST_PORT environment variable.
+    # Example: HOST_PORT=8081 docker-compose up
+    ports:
+      - "${HOST_PORT:-8080}:8080"
+    # The command to run is defined by the CMD in the Dockerfile (which will be `npm start`).
+
+    # A friendly name for the running container
+    container_name: ancient-empires-ii-server
+
+    # Restart policy: Restart the container unless it was explicitly stopped.
+    restart: unless-stopped
